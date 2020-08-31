@@ -19,6 +19,26 @@ import org.apache.maven.shared.invoker.DefaultInvoker;
 import org.apache.maven.shared.invoker.InvocationRequest;
 import org.apache.maven.shared.invoker.Invoker;
 import org.apache.maven.shared.invoker.MavenInvocationException;
+import org.apache.maven.model.building.DefaultModelBuilder;
+import org.apache.maven.model.building.DefaultModelBuilderFactory;
+import org.apache.maven.model.building.DefaultModelBuildingRequest;
+import org.apache.maven.model.resolution.ModelResolver;
+import org.apache.maven.repository.internal.MavenRepositorySystemUtils;
+import org.eclipse.aether.DefaultRepositorySystemSession;
+import org.eclipse.aether.RepositorySystem;
+import org.eclipse.aether.RepositorySystemSession;
+import org.eclipse.aether.RequestTrace;
+import org.eclipse.aether.connector.basic.BasicRepositoryConnectorFactory;
+import org.eclipse.aether.impl.ArtifactResolver;
+import org.eclipse.aether.impl.DefaultServiceLocator;
+import org.eclipse.aether.impl.RemoteRepositoryManager;
+import org.eclipse.aether.impl.VersionRangeResolver;
+import org.eclipse.aether.internal.impl.DefaultRepositorySystem;
+import org.eclipse.aether.repository.LocalRepository;
+import org.eclipse.aether.repository.RemoteRepository;
+import org.eclipse.aether.spi.connector.RepositoryConnectorFactory;
+import org.eclipse.aether.spi.connector.transport.TransporterFactory;
+import org.eclipse.aether.transport.wagon.WagonTransporterFactory;
 import org.codehaus.plexus.util.xml.Xpp3Dom;
 import org.codehaus.plexus.util.xml.pull.XmlPullParserException;
 import spoon.Launcher;
@@ -30,19 +50,23 @@ import spoon.compiler.SpoonResource;
 import spoon.compiler.SpoonResourceHelper;
 
 import java.io.BufferedReader;
+import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.FileReader;
+import java.io.FileWriter;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Date;
 import java.util.List;
 import java.util.Properties;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.lang.reflect.Constructor;
 
 public class SpoonPom implements SpoonResource {
 	static String mavenVersionParsing = "Maven home: ";
@@ -82,20 +106,84 @@ public class SpoonPom implements SpoonResource {
 		if (!path.endsWith(".xml") && !path.endsWith(".pom")) {
 			path = Paths.get(path, "pom.xml").toString();
 		}
-		this.pomFile = new File(path);
+		this.pomFile = new File(path).getAbsoluteFile();
 		if (!pomFile.exists()) {
 			throw new IOException("Pom does not exists.");
 		}
 		this.directory = pomFile.getParentFile();
 		MavenXpp3Reader pomReader = new MavenXpp3Reader();
 		try (FileReader reader = new FileReader(pomFile)) {
-			this.model = pomReader.read(reader);
-			for (String module : model.getModules()) {
-				addModule(new SpoonPom(Paths.get(pomFile.getParent(), module).toString(), this, sourceType, environment));
+			Model currModel = pomReader.read(reader);
+
+			if (currModel.getModules().size() > 0) {
+				this.model = currModel;
+				for (String module : currModel.getModules()) {
+					addModule(new SpoonPom(Paths.get(pomFile.getParent(), module).toString(), this, sourceType, environment));
+				}
+			} else {
+				// else, we generate the effective pom and use that instead
+				DefaultServiceLocator locator = serviceLocator();
+
+				RepositorySystem system = locator.getService(RepositorySystem.class);
+				DefaultRepositorySystemSession session = MavenRepositorySystemUtils.newSession();
+				LocalRepository localRepo = new LocalRepository(guessMavenHome());
+				session.setLocalRepositoryManager(system.newLocalRepositoryManager(session, localRepo));
+
+				Constructor<ModelResolver> c = modelResolverCtor();
+				RequestTrace requestTrace = new RequestTrace(null);
+				ArtifactResolver artifactResolver = locator.getService(ArtifactResolver.class);
+				VersionRangeResolver versionRangeResolver = locator.getService(VersionRangeResolver.class);
+				RemoteRepositoryManager remoteRepositoryManager = locator.getService(RemoteRepositoryManager.class);
+				List<RemoteRepository> repos = Arrays.asList(new RemoteRepository.Builder("central", "default", "https://repo.maven.apache.org/maven2/").build());
+				ModelResolver modelResolver = c.newInstance(session, requestTrace, "context",
+								artifactResolver, versionRangeResolver,
+								remoteRepositoryManager, repos);
+
+				DefaultRepositorySystem repositorySystem = new DefaultRepositorySystem();
+				repositorySystem.initService(locator);
+
+				DefaultModelBuildingRequest modelBuildingRequest = new DefaultModelBuildingRequest();
+				modelBuildingRequest.setPomFile(pomFile);
+				modelBuildingRequest.setModelResolver(modelResolver);
+				DefaultModelBuilder modelBuilder = new DefaultModelBuilderFactory().newInstance();
+
+				Model effectiveModel = modelBuilder.build(modelBuildingRequest).getEffectiveModel();
+
+				BufferedWriter writer = new BufferedWriter(new FileWriter(directory.getAbsolutePath() + "/effective-pom.xml"));
+				writer.write(effectiveModel.toString());
+				writer.close();
+				
+
+				// overwrite the non-effective pom file with the effective pom file
+				this.pomFile = new File(directory.getAbsolutePath() + "/effective-pom.xml");
+				//try (FileReader effectiveReader = new FileReader(pomFile)) {
+				this.model = effectiveModel;
+				/* } catch (FileNotFoundException e) {
+					throw new IOException("Effective pom does not exists.");
+				} */
 			}
 		} catch (FileNotFoundException e) {
 			throw new IOException("Pom does not exists.");
-		}
+		} catch (Exception e) { }
+	}
+
+	private static Constructor<ModelResolver> modelResolverCtor() throws ClassNotFoundException, NoSuchMethodException {
+		@SuppressWarnings("unchecked") Class<ModelResolver> modelResolverClass =
+			(Class<ModelResolver>) Class.forName("org.apache.maven.repository.internal.DefaultModelResolver");
+		Constructor<ModelResolver> c = modelResolverClass.getDeclaredConstructor(
+						RepositorySystemSession.class, RequestTrace.class,
+						String.class, ArtifactResolver.class,
+						VersionRangeResolver.class,
+						RemoteRepositoryManager.class, List.class);
+		c.setAccessible(true);
+		return c;
+	}
+
+	private static DefaultServiceLocator serviceLocator() {
+		DefaultServiceLocator locator = MavenRepositorySystemUtils.newServiceLocator();
+		locator.addService(RepositoryConnectorFactory.class,
+		BasicRepositoryConnectorFactory.class);
+		return locator;
 	}
 
 	private void addModule(SpoonPom module) {
@@ -133,7 +221,12 @@ public class SpoonPom implements SpoonResource {
 		if (sourcePath == null) {
 			sourcePath = Paths.get("src/main/java").toString();
 		}
-		String absoluteSourcePath = Paths.get(directory.getAbsolutePath(), sourcePath).toString();
+		String absoluteSourcePath;
+		if (directory.isAbsolute()) {
+			absoluteSourcePath = directory.getAbsolutePath();
+		} else {
+			absoluteSourcePath = Paths.get(directory.getAbsolutePath(), sourcePath).toString();
+		}
 		File source = new File(absoluteSourcePath);
 		if (source.exists()) {
 			output.add(source);
@@ -506,7 +599,7 @@ public class SpoonPom implements SpoonResource {
 
 	@Override
 	public String getName() {
-		return "pom";
+		return model.getArtifactId();
 	}
 
 	@Override
