@@ -21,6 +21,7 @@ import org.apache.maven.shared.invoker.Invoker;
 import org.apache.maven.shared.invoker.MavenInvocationException;
 import org.codehaus.plexus.util.xml.Xpp3Dom;
 import org.codehaus.plexus.util.xml.pull.XmlPullParserException;
+import org.jboss.shrinkwrap.resolver.api.maven.embedded.EmbeddedMaven;
 import spoon.Launcher;
 import spoon.MavenLauncher;
 import spoon.SpoonException;
@@ -82,16 +83,40 @@ public class SpoonPom implements SpoonResource {
 		if (!path.endsWith(".xml") && !path.endsWith(".pom")) {
 			path = Paths.get(path, "pom.xml").toString();
 		}
-		this.pomFile = new File(path);
+		this.pomFile = new File(path).getAbsoluteFile();
 		if (!pomFile.exists()) {
 			throw new IOException("Pom does not exists.");
 		}
+
 		this.directory = pomFile.getParentFile();
+
+		// first we read the root pom file and check if it has any modules
 		MavenXpp3Reader pomReader = new MavenXpp3Reader();
 		try (FileReader reader = new FileReader(pomFile)) {
-			this.model = pomReader.read(reader);
-			for (String module : model.getModules()) {
-				addModule(new SpoonPom(Paths.get(pomFile.getParent(), module).toString(), this, sourceType, environment));
+			Model currModel = pomReader.read(reader);
+
+			// if it has modules, we add them to the list
+			if (currModel.getModules().size() > 0) {
+				this.model = currModel;
+				for (String module : currModel.getModules()) {
+					addModule(new SpoonPom(Paths.get(pomFile.getParent(), module).toString(), this, sourceType, environment));
+				}
+			} else {
+				// else, we generate the effective pom and use that instead
+				EmbeddedMaven.forProject(path)
+					.addProperty("output", directory.getAbsolutePath() + "/effective-pom.xml")
+					.setOffline(true)
+					.setBatchMode(true)
+					.setGoals("help:effective-pom")
+					.build();
+
+				// overwrite the non-effective pom file with the effective pom file
+				this.pomFile = new File(directory.getAbsolutePath() + "/effective-pom.xml");
+				try (FileReader effectiveReader = new FileReader(pomFile)) {
+					this.model = pomReader.read(effectiveReader);
+				} catch (FileNotFoundException e) {
+					throw new IOException("Effective pom does not exists.");
+				}
 			}
 		} catch (FileNotFoundException e) {
 			throw new IOException("Pom does not exists.");
@@ -133,7 +158,14 @@ public class SpoonPom implements SpoonResource {
 		if (sourcePath == null) {
 			sourcePath = Paths.get("src/main/java").toString();
 		}
-		String absoluteSourcePath = Paths.get(directory.getAbsolutePath(), sourcePath).toString();
+
+		String absoluteSourcePath;
+		if (directory.isAbsolute()) {
+			absoluteSourcePath = directory.getAbsolutePath();
+		} else {
+			absoluteSourcePath = Paths.get(directory.getAbsolutePath(), sourcePath).toString();
+		}
+
 		File source = new File(absoluteSourcePath);
 		if (source.exists()) {
 			output.add(source);
@@ -506,7 +538,7 @@ public class SpoonPom implements SpoonResource {
 
 	@Override
 	public String getName() {
-		return "pom";
+		return model.getArtifactId();
 	}
 
 	@Override
