@@ -378,11 +378,11 @@ public class PositionTest {
 
 		BodyHolderSourcePosition position = (BodyHolderSourcePosition) foo.getPosition();
 
-		assertEquals(5, position.getLine());
-		assertEquals(37, position.getEndLine());
+		assertEquals(3, position.getLine());
+		assertEquals(35, position.getEndLine());
 
-		assertEquals(66, position.getSourceStart());
-		assertEquals(492, position.getSourceEnd());
+		assertEquals(42, position.getSourceStart());
+		assertEquals(468, position.getSourceEnd());
 
 		assertEquals("FooGeneric", contentAtPosition(classContent, position.getNameStart(), position.getNameEnd()));
 		assertEquals("public", contentAtPosition(classContent, position.getModifierSourceStart(), position.getModifierSourceEnd()));
