@@ -1,0 +1,77 @@
+plugins {
+	id "org.jetbrains.kotlin.jvm" apply false // https://youtrack.jetbrains.com/issue/KT-30276
+	id "io.spring.nohttp" version "0.0.3.RELEASE"
+}
+
+description = "Spring Boot Build"
+
+defaultTasks 'build'
+
+nohttp {
+	whitelistFile = project.file("src/nohttp/whitelist.lines")
+	source.exclude "buildSrc/build/**"
+}
+
+allprojects {
+	group "org.springframework.boot"
+
+	repositories {
+		mavenCentral()
+		if (version.contains('-')) {
+			maven { url "https://repo.spring.io/milestone" }
+		}
+		if (version.endsWith('-SNAPSHOT')) {
+			maven { url "https://repo.spring.io/snapshot" }
+		}
+	}
+
+	configurations.all {
+		resolutionStrategy.cacheChangingModulesFor 0, "minutes"
+	}
+
+    apply plugin: 'maven-publish'
+
+    publishing {
+        model {
+            tasks.generatePomFileForSourcegraphPublication {
+                destination = file("$projectDir/pom.xml")
+            }
+        }
+        publications {
+            sourcegraph(MavenPublication) {
+                if (components.collect{it.getName()}.contains("java")) {
+                    from components.java
+                }
+
+                def projectDirStr = project.projectDir
+                def subprojectSet = project.subprojects
+                if (!(new File(projectDirStr.toString()+"/build.gradle").exists())) {
+                    return
+                }
+                pom.withXml {
+                    def node = asNode();
+                    if (node.get("build").size() > 0) {
+                        node.appendNode('build').with {
+                            if (project.sourceSets.main.java.srcDirs.size() > 0) {
+                                appendNode('sourceDirectory', project.sourceSets.main.java.srcDirs.first())
+                            } else {
+                                def dirpath = "${projectDirStr}/src/main/java"
+                                if (new File(dirpath).exists()) appendNode('sourceDirectory', dirpath)
+                            }
+                        }
+                    }
+
+                    if (subprojectSet.size() > 0) {
+                        node.appendNode("modules").with {
+                            for(Project p : subprojectSet) {
+                                if(new File(p.path.replace(":", "/").substring(1)+"/build.gradle").exists()) {
+                                    appendNode("module", p.path.replace(":", "/").substring(1))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
