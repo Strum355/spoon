@@ -609,7 +609,7 @@ public class SpoonPom implements SpoonResource {
 
 	@Override
 	public String getName() {
-		return "pom";
+		return model.getName();
 	}
 
 	@Override
