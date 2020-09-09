@@ -1,0 +1,2 @@
+{"projectRoot":"file:///home/noah/Sourcegraph/playground/java/dropwizard","positionEncoding":"utf-16","id":"1","label":"metaData","toolInfo":{"name":"lsif-java","version":"0.1.0"},"type":"vertex","version":"0.4.0"}
+{"id":"2","label":"project","type":"vertex","kind":"java"}

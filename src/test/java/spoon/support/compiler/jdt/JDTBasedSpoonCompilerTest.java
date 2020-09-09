@@ -19,6 +19,7 @@ package spoon.support.compiler.jdt;
 import org.eclipse.jdt.internal.compiler.ast.CompilationUnitDeclaration;
 import org.junit.Test;
 import spoon.Launcher;
+import spoon.MavenLauncher;
 
 import java.util.List;
 
@@ -47,5 +48,13 @@ public class JDTBasedSpoonCompilerTest {
 				assertTrue("There is a sort error: " + filenameCu0 + " should be before " + filenameCu1, filenameCu0.compareTo(filenameCu1) < 0);
 			}
 		}
+	}
+
+	@Test
+	public void dropwizardClassIssue() {
+		final Launcher spoon = new MavenLauncher("./src/test/resources/dropwizardtest/dropwizard", MavenLauncher.SOURCE_TYPE.ALL_SOURCE);
+		spoon.getEnvironment().setIgnoreDuplicateDeclarations(true);
+        spoon.getEnvironment().setComplianceLevel(9);
+        spoon.buildModel();
 	}
 }
